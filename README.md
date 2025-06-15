@@ -64,12 +64,30 @@ npx -y @smithery/cli@latest install @JackKuo666/pubmed-mcp-server --client cline
    pip install -r requirements.txt
    ```
 
+3. *(Optional)* Set your PubMed API key to increase request limits:
+   ```bash
+   export PUBMED_API_KEY=YOUR_KEY_HERE
+   ```
+
+4. *(Optional)* If your institution provides an EZproxy service for accessing
+   publisher content, set the prefix so downloaded articles use it:
+   ```bash
+   export EZPROXY_PREFIX="https://yourlibrary.edu/login?url="
+   ```
+
 ## 📊 Usage
 
 Start the MCP server:
 
 ```bash
 python pubmed_server.py
+```
+
+You can also specify your PubMed API key and EZproxy prefix directly as
+command-line options:
+
+```bash
+python pubmed_server.py --api-key YOUR_KEY --ezproxy-prefix "https://yourlibrary.edu/login?url="
 ```
 ## Usage with Claude Desktop
 

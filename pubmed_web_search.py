@@ -5,10 +5,31 @@ from collections import Counter
 import re
 import requests
 
-def generate_pubmed_search_url(term=None, title=None, author=None, journal=None, 
-                               start_date=None, end_date=None, num_results=10):
-    """根据用户输入的字段生成 PubMed 搜索 URL"""
+# Optional API key for PubMed e-utilities
+PUBMED_API_KEY = os.getenv("PUBMED_API_KEY")
+# Optional EZproxy prefix for full text downloads
+EZPROXY_PREFIX = os.getenv("EZPROXY_PREFIX")
+
+def _apply_ezproxy(url: str, prefix: str | None = None) -> str:
+    """Prefix a URL with the EZproxy prefix if provided."""
+    prefix = prefix or EZPROXY_PREFIX
+    if prefix:
+        return prefix + url
+    return url
+
+def generate_pubmed_search_url(term=None, title=None, author=None, journal=None,
+                               start_date=None, end_date=None, num_results=10,
+                               api_key=None):
+    """根据用户输入的字段生成 PubMed 搜索 URL
+
+    Parameters
+    ----------
+    api_key : str, optional
+        PubMed API key to increase rate limits. If not provided, the value from
+        the ``PUBMED_API_KEY`` environment variable will be used if present.
+    """
     base_url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
+    api_key = api_key or PUBMED_API_KEY
     query_parts = []
     
     if term:
@@ -29,7 +50,10 @@ def generate_pubmed_search_url(term=None, title=None, author=None, journal=None,
         "retmax": num_results,
         "retmode": "xml"
     }
-    
+
+    if api_key:
+        params["api_key"] = api_key
+
     return f"{base_url}?{'&'.join([f'{k}={v}' for k, v in params.items()])}"
 
 def search_pubmed(search_url):
@@ -48,10 +72,25 @@ def search_pubmed(search_url):
         print(f"Error: Unable to fetch data (status code: {response.status_code})")
         return []
 
-def get_pubmed_metadata(pmid):
-    """使用 PubMed API 通过 PMID 获取文章的详细元数据"""
-    url = f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=pubmed&id={pmid}&retmode=xml"
-    response = requests.get(url)
+def get_pubmed_metadata(pmid, api_key=None):
+    """使用 PubMed API 通过 PMID 获取文章的详细元数据
+
+    Parameters
+    ----------
+    api_key : str, optional
+        PubMed API key. If omitted, the ``PUBMED_API_KEY`` environment variable
+        is used if available.
+    """
+    api_key = api_key or PUBMED_API_KEY
+    base_url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi"
+    params = {
+        "db": "pubmed",
+        "id": pmid,
+        "retmode": "xml",
+    }
+    if api_key:
+        params["api_key"] = api_key
+    response = requests.get(base_url, params=params)
     
     if response.status_code == 200:
         root = ET.fromstring(response.content)
@@ -91,16 +130,32 @@ def get_pubmed_metadata(pmid):
         print(f"Error: Unable to fetch metadata (status code: {response.status_code})")
         return None
 
-def download_full_text_pdf(pmid):
-    """尝试下载全文 PDF 或提供文章链接"""
+def download_full_text_pdf(pmid, api_key=None, ezproxy_prefix=None):
+    """尝试下载全文 PDF 或提供文章链接
+
+    Parameters
+    ----------
+    api_key : str, optional
+        PubMed API key used when fetching PMC information. Falls back to the
+        ``PUBMED_API_KEY`` environment variable if not supplied.
+    ezproxy_prefix : str, optional
+        Prefix for your institution's EZproxy service. If provided (or set via
+        the ``EZPROXY_PREFIX`` environment variable), PDF and article URLs will
+        be prefixed with this value for easier access to subscription content.
+    """
+    api_key = api_key or PUBMED_API_KEY
+    ezproxy_prefix = ezproxy_prefix or EZPROXY_PREFIX
     print(f"Attempting to access full text for PMID: {pmid}")
     
     # 首先，我们需要检查这篇文章是否有PMC ID
-    efetch_url = f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=pubmed&id={pmid}&retmode=xml"
+    base_url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi"
+    params = {"db": "pubmed", "id": pmid, "retmode": "xml"}
+    if api_key:
+        params["api_key"] = api_key
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
     }
-    response = requests.get(efetch_url, headers=headers)
+    response = requests.get(base_url, params=params, headers=headers)
     
     if response.status_code != 200:
         print(f"Error: Unable to fetch article data (status code: {response.status_code})")
@@ -116,29 +171,42 @@ def download_full_text_pdf(pmid):
         return f"No PMC ID found for PMID: {pmid}" + "\n" + f"You can check the article availability at: {pubmed_url}"
     
     pmc_id = pmc_id.text
-    
+
     # 检查文章是否为开放访问
     pmc_url = f"https://www.ncbi.nlm.nih.gov/pmc/articles/{pmc_id}/"
-    pmc_response = requests.get(pmc_url, headers=headers)
+    pmc_request_url = _apply_ezproxy(pmc_url, ezproxy_prefix)
+    pmc_response = requests.get(pmc_request_url, headers=headers)
     
     if pmc_response.status_code != 200:
         print(f"Error: Unable to access PMC article page (status code: {pmc_response.status_code})")
         print(f"You can check the article availability at: {pmc_url}")
-        return f"Error: Unable to access PMC article page (status code: {pmc_response.status_code})" + "\n" + f"You can check the article availability at: {pmc_url}"f"You can check the article availability at: {pmc_url}"
+        return (
+            f"Error: Unable to access PMC article page (status code: {pmc_response.status_code})" +
+            "\n" +
+            f"You can check the article availability at: {pmc_url}"
+        )
     
     if "This article is available under a" not in pmc_response.text:
-        print(f"The article doesn't seem to be fully open access.")
+        print("The article doesn't seem to be fully open access.")
         print(f"You can check the article availability at: {pmc_url}")
-        return f"The article doesn't seem to be fully open access." + "\n" + f"You can check the article availability at: {pmc_url}"
+        return (
+            "The article doesn't seem to be fully open access." + "\n" +
+            f"You can check the article availability at: {pmc_url}"
+        )
     
     # 尝试下载PDF
     pdf_url = f"https://www.ncbi.nlm.nih.gov/pmc/articles/{pmc_id}/pdf"
-    pdf_response = requests.get(pdf_url, headers=headers)
+    pdf_request_url = _apply_ezproxy(pdf_url, ezproxy_prefix)
+    pdf_response = requests.get(pdf_request_url, headers=headers)
     
     if pdf_response.status_code != 200:
         print(f"Error: Unable to download PDF (status code: {pdf_response.status_code})")
         print(f"You can try accessing the article directly at: {pmc_url}")
-        return f"Error: Unable to download PDF (status code: {pdf_response.status_code})" + "\n" + f"You can try accessing the article directly at: {pmc_url}"
+        return (
+            f"Error: Unable to download PDF (status code: {pdf_response.status_code})" +
+            "\n" +
+            f"You can try accessing the article directly at: {pmc_url}"
+        )
     
     # 保存PDF文件
     filename = f"PMID_{pmid}_PMC_{pmc_id}.pdf"
