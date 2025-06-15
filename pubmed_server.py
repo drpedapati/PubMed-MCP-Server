@@ -1,8 +1,33 @@
 from typing import Any, List, Dict, Optional, Union
+import argparse
+import os
 import asyncio
 import logging
+
+parser = argparse.ArgumentParser(description="Run the PubMed MCP server")
+parser.add_argument(
+    "--api-key",
+    help="PubMed API key for increased request limits",
+)
+parser.add_argument(
+    "--ezproxy-prefix",
+    help="Prefix for EZproxy based full-text access",
+)
+args, unknown = parser.parse_known_args()
+
+if args.api_key:
+    os.environ["PUBMED_API_KEY"] = args.api_key
+if args.ezproxy_prefix:
+    os.environ["EZPROXY_PREFIX"] = args.ezproxy_prefix
+
 from mcp.server.fastmcp import FastMCP
-from pubmed_web_search import search_key_words, search_advanced, get_pubmed_metadata, download_full_text_pdf, deep_paper_analysis
+from pubmed_web_search import (
+    search_key_words,
+    search_advanced,
+    get_pubmed_metadata,
+    download_full_text_pdf,
+    deep_paper_analysis,
+)
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
